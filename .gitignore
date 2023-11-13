@@ -1,0 +1,3 @@
+# Any executable file should not be tracked by git.
+*.exe
+*.json
