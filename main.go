@@ -27,6 +27,13 @@ type Vlan struct {
 	Snip      string
 }
 
+// Route represents data related to Routes configured on a NetScaler.
+type Route struct {
+	Network *net.IPNet
+	Netmask string
+	Gateway net.IP
+}
+
 // SubnetMaskMap is a function that returns a map of subnet masks that map decimal notation to their
 // equivalent CIDR notation.
 func SubnetMaskMap() map[string]string {
@@ -181,6 +188,29 @@ func DefaultRouteIPaddress(c *service.NitroClient, resourceType string) (IpAddre
 	return ip, nil
 }
 
+// GetStaticRoutes is a function that returns all static routes configured on a NetScaler, except for the default route.
+func GetStaticRoutes(c *service.NitroClient, resourceType string) ([]Route, error) {
+	var StaticRoutes []Route
+	routes, err := GetNetScalerResources(c, resourceType)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	for _, route := range routes {
+		if route["routetype"] == "STATIC" && route["network"] != "0.0.0.0" {
+			var staticRoute Route
+			_, staticRoute.Network, err = net.ParseCIDR(route["network"].(string) + ConvertMask(route["netmask"].(string)))
+			if err != nil {
+				fmt.Println(err)
+			}
+			staticRoute.Netmask = route["netmask"].(string)
+			staticRoute.Gateway = net.ParseIP(route["gateway"].(string))
+			StaticRoutes = append(StaticRoutes, staticRoute)
+		}
+	}
+	return StaticRoutes, nil
+}
+
 func main() {
 	reader := bufio.NewReader(os.Stdin)
 	// Prompt for a username.
@@ -266,17 +296,43 @@ func main() {
 
 	// If results are returned, this information will be used for communication.
 	if len(results) == 0 {
-		gateway, err := DefaultRouteIPaddress(client, "route")
+		var StaticRouteResults []Route
+		staticRoutes, err := GetStaticRoutes(client, "route")
 		if err != nil {
 			fmt.Println(err)
 		}
-		for _, ip := range bindIps {
-			if ip.Network.Contains(gateway.IpAddress) {
-				if ip.Vlan.Channel != nil {
-					fmt.Println("Default Route is being used to communicate with this server: " + string(serverIP) + " and will source from SNIP: " + ip.IpAddress.String() + ". It will use the " + ip.Vlan.Channel[0] + " interface and is on VLAN: " + ip.Vlan.Id)
+		for _, staticRoute := range staticRoutes {
+			if staticRoute.Network.Contains(net.ParseIP(string(serverIP))) {
+				StaticRouteResults = append(StaticRouteResults, staticRoute)
+			}
+		}
+		if len(StaticRouteResults) != 0 {
+			for _, sr := range StaticRouteResults {
+				for _, ip := range bindIps {
+					if ip.Network.Contains(sr.Gateway) {
+						if ip.Vlan.Channel != nil {
+							fmt.Println("The server: " + string(serverIP) + " will interact with SNIP: " + ip.IpAddress.String() + " and it will use the " + ip.Vlan.Channel[0] + " interface and is on VLAN: " + ip.Vlan.Id)
+						}
+						if ip.Vlan.Interface != nil {
+							fmt.Println("The server: " + string(serverIP) + " will interact with SNIP: " + ip.IpAddress.String() + " and it will use the " + ip.Vlan.Interface[0] + " interface and is on VLAN: " + ip.Vlan.Id)
+						}
+					}
 				}
-				if ip.Vlan.Interface != nil {
-					fmt.Println("Default Route is being used to communicate with this server: " + string(serverIP) + " and will source from SNIP: " + ip.IpAddress.String() + ". It will use the " + ip.Vlan.Interface[0] + " interface and is on VLAN: " + ip.Vlan.Id)
+			}
+		}
+		if len(StaticRouteResults) == 0 {
+			gateway, err := DefaultRouteIPaddress(client, "route")
+			if err != nil {
+				fmt.Println(err)
+			}
+			for _, ip := range bindIps {
+				if ip.Network.Contains(gateway.IpAddress) {
+					if ip.Vlan.Channel != nil {
+						fmt.Println("Default Route is being used to communicate with this server: " + string(serverIP) + " and will source from SNIP: " + ip.IpAddress.String() + ". It will use the " + ip.Vlan.Channel[0] + " interface and is on VLAN: " + ip.Vlan.Id)
+					}
+					if ip.Vlan.Interface != nil {
+						fmt.Println("Default Route is being used to communicate with this server: " + string(serverIP) + " and will source from SNIP: " + ip.IpAddress.String() + ". It will use the " + ip.Vlan.Interface[0] + " interface and is on VLAN: " + ip.Vlan.Id)
+					}
 				}
 			}
 		}
